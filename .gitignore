@@ -58,6 +58,8 @@ cover/
 # Django stuff:
 *.log
 audit_log.json
+scheduled_tasks.json
+muted_members.json
 local_settings.py
 db.sqlite3
 db.sqlite3-journal
