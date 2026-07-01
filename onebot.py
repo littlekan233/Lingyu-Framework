@@ -15,6 +15,8 @@ __all__ = [
 
 # 事件列表（key是id，value是原事件）
 _events = {}
+_pending_audits = {}
+_audit_cmdtypes = {"recall", "mute", "unmute", "kick", "essence"}
 
 def _add_event(evdata: dict) -> str:
     # 生成8位随机字符串（感谢DeepSeek）
@@ -47,18 +49,23 @@ def process_event(event: dict) -> str | None:
         eid = _add_event(event)
         logger.debug(f"收到消息事件（ID：{eid}），raw_message：{event["raw_message"]}") # 我直接上["raw_messsge"]，炸了我倒立
         return eid
-    elif event.get("status") and event.get("retcode"):
+    elif event.get("status") and "retcode" in event:
         # 这一大长串条件是为了确定这是个请求响应（
         eid = event["echo"] # 报错我倒立，我就不信有特殊的OneBot协议端
         # TODO: 感觉可能得套层 try-except 防止 eventid 出现不存在的意外情况
         # TODO: 但理论上来讲似乎不会出问题 谁知道实际会咋样呢（
-        if eid: del _events[eid]
         # 窝要验牌
         if event["status"] == "ok":
         # 牌没有问题
+            pending_command = _pending_audits.pop(eid, None)
+            if pending_command and eid in _events:
+                from command import record_audit
+                record_audit(_events[eid], pending_command)
             logger.success(f"ID 为 {eid} 的事件处理成功desuwa！")
         else:
+            _pending_audits.pop(eid, None)
             logger.error(f"ID 为 {eid} 的事件处理失败！协议端返回：{event}")
+        if eid: _events.pop(eid, None)
     return # 剩下的event基本上不用处理。
 
 def get_event(eventid: str) -> dict:
@@ -86,6 +93,8 @@ def build_request(command: dict) -> dict | None:
         logger.debug(f"ID 为 {eid} 的事件无需处理。")
         del _events[eid]
         return None
+    if command["type"] in _audit_cmdtypes:
+        _pending_audits[eid] = command
     # 要开始（构建 OneBot 请求）了哟～
     event = _events[eid]
     cmdtype = command["type"]
@@ -135,6 +144,16 @@ def build_request(command: dict) -> dict | None:
                 "group_id": str(event["group_id"]),
                 "user_id": str(command["id"]),
                 "duration": command["time"]
+            },
+            "echo": eid
+        }
+    elif cmdtype == "unmute":
+        return {
+            "action": "set_group_ban",
+            "params": {
+                "group_id": str(event["group_id"]),
+                "user_id": str(command["id"]),
+                "duration": 0
             },
             "echo": eid
         }

@@ -17,10 +17,12 @@
 from onebot import get_event
 from loguru import logger
 from os import environ
-import re
+from pathlib import Path
+import json, re, time
 
 __all__ = [
-    "process_msg"
+    "process_msg",
+    "record_audit"
 ]
 
 # 白名单
@@ -33,8 +35,12 @@ _perm_cmd = {
     "do_unmute": int(environ.get("PERM_MUTE", "1")),
     "do_kick": int(environ.get("PERM_KICK", "1")),
     "do_essence": int(environ.get("PERM_ESSENCE", "0")),
-    "do_help": int(environ.get("PERM_HELP", "0"))
+    "do_help": int(environ.get("PERM_HELP", "0")),
+    "do_audit": int(environ.get("PERM_AUDIT", environ.get("PERM_HELP", "0")))
 }
+
+_audit_log_path = Path(environ.get("AUDIT_LOG_FILE", "audit_log.json"))
+_audit_retention_secs = 14 * 24 * 60 * 60
 
 # 权限机制 - 成员权限等级覆写
 _perm_member_override = {}
@@ -79,19 +85,102 @@ def _parse_time(time: str) -> int:
     传入的内容是 str 类型的带格式的时间。
     返回一个 int 类型的以秒为单位的时间。
     '''
+    time = time.strip().replace(" ", "")
     time = time.replace('天', 'd').replace("day","d").replace('小时', 'h').replace("hour","h")\
-    .replace('分', 'm').replace('min','m').replace('sec','s').replace('秒', 's')
-    if not time or not re.search(r'\d+[dhms]', time):
+    .replace('分钟', 'm').replace('分', 'm').replace('min','m').replace('sec','s').replace('秒', 's')
+    if not time or not re.fullmatch(r'(\d+[dhms]?)+', time):
         raise ValueError("你确定你传进来的参数合法吗？")
     timesecs = 0
-    pattern = re.findall(r"(\d+)([dhms])", time)
+    pattern = re.findall(r"(\d+)([dhms]?)", time)
     for val, unit in pattern:
         val = int(val)
         if unit == "d": timesecs += val * 86400
         elif unit == "h": timesecs += val * 3600
         elif unit == "m": timesecs += val * 60
-        elif unit == "s": timesecs += val
+        elif unit == "s" or unit == "": timesecs += val
     return timesecs
+
+def _load_audit_records() -> list[dict]:
+    try:
+        with _audit_log_path.open("r", encoding="utf-8") as f:
+            records = json.load(f)
+        if isinstance(records, list):
+            return records
+    except FileNotFoundError:
+        return []
+    except (json.JSONDecodeError, OSError) as e:
+        logger.warning(f"读取操作记录失败：{e}")
+    return []
+
+def _save_audit_records(records: list[dict]) -> None:
+    try:
+        with _audit_log_path.open("w", encoding="utf-8") as f:
+            json.dump(records, f, ensure_ascii=False, indent=2)
+    except OSError as e:
+        logger.warning(f"保存操作记录失败：{e}")
+
+def _prune_audit_records(records: list[dict], now: int | None = None) -> list[dict]:
+    now = now or int(time.time())
+    min_ts = now - _audit_retention_secs
+    return [record for record in records if int(record.get("timestamp", 0)) >= min_ts]
+
+def _format_time(ts: int) -> str:
+    return time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(ts))
+
+def _format_duration(seconds: int) -> str:
+    if seconds <= 0:
+        return "0秒"
+    parts = []
+    for unit, unit_seconds in (("天", 86400), ("小时", 3600), ("分钟", 60), ("秒", 1)):
+        value, seconds = divmod(seconds, unit_seconds)
+        if value:
+            parts.append(f"{value}{unit}")
+    return "".join(parts)
+
+def _describe_command(command: dict) -> str:
+    cmdtype = command["type"]
+    if cmdtype == "recall":
+        return f"撤回消息 {command['id']}"
+    if cmdtype == "essence":
+        return f"设置精华消息 {command['id']}"
+    if cmdtype == "mute":
+        return f"禁言 {command['id']} {_format_duration(command['time'])}"
+    if cmdtype == "unmute":
+        return f"解除禁言 {command['id']}"
+    if cmdtype == "kick":
+        return f"踢出 {command['id']}"
+    return cmdtype
+
+def record_audit(event: dict, command: dict) -> None:
+    records = _prune_audit_records(_load_audit_records())
+    sender = event["sender"]
+    records.append({
+        "timestamp": int(time.time()),
+        "group_id": int(event["group_id"]),
+        "operator_id": int(sender["user_id"]),
+        "operator_name": sender.get("card") or sender.get("nickname") or str(sender["user_id"]),
+        "message_id": int(event["message_id"]),
+        "type": command["type"],
+        "target_id": command.get("id"),
+        "duration": command.get("time"),
+        "description": _describe_command(command)
+    })
+    _save_audit_records(records)
+
+def _build_audit_message(group_id: int) -> str:
+    records = _prune_audit_records(_load_audit_records())
+    _save_audit_records(records)
+    group_records = [record for record in records if int(record.get("group_id", 0)) == int(group_id)]
+    if not group_records:
+        return "当前群最近两周没有操作记录。"
+    lines = ["当前群最近两周操作记录："]
+    for record in group_records:
+        lines.append(
+            f"{_format_time(int(record['timestamp']))} "
+            f"{record.get('operator_name', record.get('operator_id'))}({record.get('operator_id')}) "
+            f"{record.get('description', record.get('type'))}"
+        )
+    return "\n".join(lines)
 
 # 通用命令封装builder（ignore, error）
 _ignore = lambda e: { "event_id": e, "ignore": True }
@@ -146,6 +235,7 @@ https://github.com/littlekan233/groupadmin
 禁言：发送 /mute @xxx 时间 或者 /禁言 @xxx 时间
 解禁：发送 /unmute @xxx 或者 /解禁 @xxx
 踢人：发送 /kick @xxx 或者 /踢人 @xxx
+操作记录：发送 /audit 或者 /操作记录
 
 时间限制单位有天、小时、分钟、秒，可以组合出现。
 天：d/day
@@ -161,6 +251,13 @@ https://github.com/littlekan233/groupadmin
         "type": "error",
         "errinfo": helpmsg
     } # 谁他妈教你帮助用error的？？？
+
+def do_audit(eventid: str, group_id: int, **kwargs) -> dict:
+    return {
+        "event_id": eventid,
+        "type": "error",
+        "errinfo": _build_audit_message(group_id)
+    }
 
 # placeholder handler
 def placeholder_handler(**kwargs):
@@ -214,8 +311,10 @@ def process_msg(eventid: str) -> dict:
                 cmd_handler = do_mute
             elif msg == "/unmute" or msg == "/解禁":
                 cmd_handler = do_unmute
-            elif msg == "/gahelp":
+            elif msg == "/gahelp" or msg == "/帮助":
                 cmd_handler = do_help
+            elif msg == "/audit" or msg == "/操作记录":
+                cmd_handler = do_audit
             else: # 这一块是为了/mute @xxx <time>的time能被解析到。
                 if cmd_handler == do_mute and target_qquid > 0:
                     # ok确认这一段消息是禁言时间
@@ -226,7 +325,8 @@ def process_msg(eventid: str) -> dict:
     senderperm = _get_user_permlevel(event["group_id"], event["sender"])
     if cmd_handler.__name__ != "placeholder_handler" and senderperm >= _perm_cmd[cmd_handler.__name__]: 
         # 用户权限检查通过
-        return cmd_handler(eventid=eventid, target_msg=target_msgid, target_qq=target_qquid, mute_time=mute_time)
+        command = cmd_handler(eventid=eventid, group_id=event["group_id"], target_msg=target_msgid, target_qq=target_qquid, mute_time=mute_time)
+        return command
     elif cmd_handler.__name__ != "placeholder_handler":
         logger.debug(f"perm not pass. sender perm: {senderperm}")
     return _ignore(eventid)
