@@ -87,11 +87,13 @@ class ReplyAction(BaseAction):
 class RecallAction(BaseAction):
     type: Literal[ActionType.RECALL] = ActionType.RECALL
     message_id: int
+    target_summary: str | None = None
 
 
 class EssenceAction(BaseAction):
     type: Literal[ActionType.ESSENCE] = ActionType.ESSENCE
     message_id: int
+    target_summary: str | None = None
 
 
 class MuteAction(BaseAction):

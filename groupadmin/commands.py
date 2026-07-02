@@ -72,7 +72,7 @@ class CommandService:
                 logger.debug(f"found reply, target message_id: {target_message_id}")
             elif segment.type == "at":
                 at_target = segment.data.get("qq")
-                if _is_at_all(at_target):
+                if at_target == "all":
                     target_all = True
                     logger.debug("found at all members")
                 else:
@@ -189,10 +189,6 @@ def _to_int(value: object) -> int:
         return int(value)
     except (TypeError, ValueError):
         return 0
-
-
-def _is_at_all(value: object) -> bool:
-    return _is_all_keyword(value)
 
 
 def _is_all_keyword(value: object) -> bool:

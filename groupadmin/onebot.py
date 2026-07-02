@@ -40,6 +40,7 @@ class OneBotAdapter:
             )
         if isinstance(action, EssenceAction):
             return OneBotRequest(
+                # NapCat 扩展接口：OneBot V11 标准公共 API 不包含 set_essence_msg。
                 action="set_essence_msg",
                 params={"message_id": action.message_id},
                 echo=action.event_id,
@@ -69,7 +70,11 @@ class OneBotAdapter:
                 return None
             return OneBotRequest(
                 action="set_group_ban",
-                params={"group_id": str(event.group_id), "user_id": str(action.user_id), "duration": 0},
+                params={
+                    "group_id": str(event.group_id),
+                    "user_id": str(action.user_id),
+                    "duration": 0,
+                },
                 echo=action.event_id,
             )
         if isinstance(action, AutoMuteAction):
@@ -85,13 +90,19 @@ class OneBotAdapter:
         if isinstance(action, WholeMuteAction):
             return OneBotRequest(
                 action="set_group_whole_ban",
-                params={"group_id": str(action.group_id), "enable": True},
+                params={
+                    "group_id": str(action.group_id),
+                    "enable": True,
+                },
                 echo=action.event_id,
             )
         if isinstance(action, WholeUnmuteAction):
             return OneBotRequest(
                 action="set_group_whole_ban",
-                params={"group_id": str(action.group_id), "enable": False},
+                params={
+                    "group_id": str(action.group_id),
+                    "enable": False,
+                },
                 echo=action.event_id,
             )
         if isinstance(action, RecallAction):
@@ -119,6 +130,13 @@ class OneBotAdapter:
         return OneBotRequest(
             action="get_group_member_list",
             params={"group_id": str(group_id)},
+            echo=echo,
+        )
+
+    def build_message_lookup_request(self, message_id: int, echo: str) -> OneBotRequest:
+        return OneBotRequest(
+            action="get_msg",
+            params={"message_id": message_id},
             echo=echo,
         )
 

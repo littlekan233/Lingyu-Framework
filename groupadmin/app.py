@@ -15,6 +15,7 @@ from groupadmin.config import AppConfig
 from groupadmin.models import (
     ApiResponse,
     AutoMuteAction,
+    EssenceAction,
     GroupIncreaseNotice,
     LifecycleEvent,
     MessageEvent,
@@ -75,6 +76,12 @@ class GroupAdminApp:
         event_id = self.store.add(message_event)
         logger.debug(f"收到消息事件（ID：{event_id}），raw_message：{message_event.raw_message}")
         action = self.command_service.process(event_id, message_event)
+        if self._needs_target_message_lookup(action):
+            lookup_echo = f"{event_id}:target_message"
+            self.store.mark_pending_target_message_lookup(lookup_echo, action)
+            request = self.onebot.build_message_lookup_request(action.message_id, lookup_echo)
+            return self._dump_request(request)
+
         request = self.onebot.build_request(message_event, action)
         if request is None:
             logger.debug(f"ID 为 {event_id} 的事件无需处理。")
@@ -123,6 +130,11 @@ class GroupAdminApp:
             await self._handle_owner_lookup_response(owner_reminder_group_id, response, request_sender)
             return
 
+        target_lookup_action = self.store.pop_pending_target_message_lookup(response.echo)
+        if target_lookup_action is not None:
+            await self._handle_target_message_lookup_response(target_lookup_action, response, request_sender)
+            return
+
         pending_action = self.store.pop_pending_audit(response.echo)
         original_event = self.store.get(response.echo)
         if response.status == "ok":
@@ -164,6 +176,32 @@ class GroupAdminApp:
         request = self.onebot.build_group_member_list_request(group_id, echo)
         # 先查群成员列表，拿到 role=owner 的 QQ 后才能真正 @群主。
         self.store.mark_pending_owner_reminder(echo, group_id)
+        await request_sender(self._dump_request(request))
+
+    async def _handle_target_message_lookup_response(
+        self,
+        action: RecallAction | EssenceAction,
+        response: ApiResponse,
+        request_sender: RequestSender | None,
+    ) -> None:
+        original_event = self.store.get(action.event_id)
+        if original_event is None:
+            return
+        if request_sender is None:
+            self.store.remove(action.event_id)
+            return
+
+        if response.status == "ok":
+            action.target_summary = self.audit_log.summarize_message_data(response.data, str(action.message_id))
+        else:
+            logger.warning(f"获取消息 {action.message_id} 的内容失败，将使用消息 ID 写入审计：{response.model_dump()}")
+
+        request = self.onebot.build_request(original_event, action)
+        if request is None:
+            self.store.remove(action.event_id)
+            return
+
+        self.store.mark_pending_audit(action)
         await request_sender(self._dump_request(request))
 
     async def _handle_owner_lookup_response(
@@ -283,6 +321,10 @@ class GroupAdminApp:
     @staticmethod
     def _is_api_response(event: dict[str, Any]) -> bool:
         return bool(event.get("status") and "retcode" in event)
+
+    @staticmethod
+    def _needs_target_message_lookup(action: object) -> bool:
+        return isinstance(action, RecallAction | EssenceAction) and action.target_summary is None
 
     @staticmethod
     def _dump_request(request: OneBotRequest) -> str:

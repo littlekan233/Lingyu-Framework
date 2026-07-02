@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import time
 from pathlib import Path
 
@@ -124,9 +125,9 @@ class AuditLog:
 
     def _describe(self, action: CommandAction) -> str:
         if isinstance(action, RecallAction):
-            return f"撤回消息 {action.message_id}"
+            return f"撤回“{action.target_summary or action.message_id}”的一条消息"
         if isinstance(action, EssenceAction):
-            return f"设置精华消息 {action.message_id}"
+            return f"设置精华消息 {action.target_summary or action.message_id}"
         if isinstance(action, MuteAction):
             return f"禁言 {action.user_id} {self._format_duration(action.duration)}"
         if isinstance(action, AutoMuteAction):
@@ -160,3 +161,56 @@ class AuditLog:
         if isinstance(action, AutoMuteAction | WholeMuteAction | WholeUnmuteAction):
             return action.group_id
         return None
+
+    @classmethod
+    def summarize_message_data(cls, data: object, fallback: str) -> str:
+        if isinstance(data, dict):
+            message = data.get("message")
+            if isinstance(message, list):
+                summary = "".join(cls._message_segment_summary(segment) for segment in message).strip()
+                if summary:
+                    return cls._compact_summary(summary)
+            if isinstance(message, str) and message.strip():
+                return cls._compact_summary(cls._strip_cq_code(message.strip()))
+
+            raw_message = data.get("raw_message")
+            if isinstance(raw_message, str) and raw_message.strip():
+                return cls._compact_summary(cls._strip_cq_code(raw_message.strip()))
+
+        return cls._compact_summary(fallback)
+
+    @staticmethod
+    def _message_segment_summary(segment: object) -> str:
+        if not isinstance(segment, dict):
+            return ""
+        segment_type = segment.get("type")
+        data = segment.get("data")
+        if not isinstance(data, dict):
+            data = {}
+        if segment_type == "text":
+            return AuditLog._strip_cq_code(str(data.get("text", "")))
+        if segment_type == "at":
+            return f"@{data.get('qq', '')}"
+        summary = data.get("summary")
+        if isinstance(summary, str) and summary.strip():
+            return AuditLog._strip_cq_code(summary.strip())
+        if segment_type == "face":
+            return "[表情]"
+        if segment_type == "image":
+            return "[图片]"
+        if segment_type == "record":
+            return "[语音]"
+        if segment_type == "video":
+            return "[视频]"
+        return f"[{segment_type}]"
+
+    @staticmethod
+    def _strip_cq_code(value: str) -> str:
+        return re.sub(r"\[CQ:[^\]]+\]", "", value).strip()
+
+    @staticmethod
+    def _compact_summary(value: str) -> str:
+        value = " ".join(value.split())
+        if len(value) <= 12:
+            return value
+        return f"{value[:5]}……{value[-5:]}"

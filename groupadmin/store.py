@@ -11,6 +11,7 @@ class EventStore:
     def __init__(self) -> None:
         self._events: dict[str, MessageEvent] = {}
         self._pending_audits: dict[str, CommandAction] = {}
+        self._pending_target_message_lookups: dict[str, CommandAction] = {}
         self._pending_prompt_recalls: dict[str, int] = {}
         self._pending_owner_reminders: dict[str, int] = {}
 
@@ -33,6 +34,12 @@ class EventStore:
 
     def pop_pending_audit(self, event_id: str) -> CommandAction | None:
         return self._pending_audits.pop(event_id, None)
+
+    def mark_pending_target_message_lookup(self, echo: str, action: CommandAction) -> None:
+        self._pending_target_message_lookups[echo] = action
+
+    def pop_pending_target_message_lookup(self, echo: str) -> CommandAction | None:
+        return self._pending_target_message_lookups.pop(echo, None)
 
     def mark_pending_prompt_recall(self, echo: str, delay_seconds: int) -> None:
         self._pending_prompt_recalls[echo] = delay_seconds

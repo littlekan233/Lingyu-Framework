@@ -1,7 +1,6 @@
 from __future__ import annotations
 
-import inspect
-import logging
+import inspect, logging
 from os import environ
 from sys import stdout
 
@@ -34,4 +33,3 @@ def setup_logger(show_startup_log: bool = True) -> None:
     logging.basicConfig(handlers=[InterceptHandler()], level=0, force=True)
     if show_startup_log:
         logger.success(f"已初始化 logger。日志等级：{loglevel}")
-
